@@ -4,9 +4,7 @@
 //   M2 : on MSG_DOORBELL -> beep the local buzzer and log the press/lock state.
 //   M3 : on MSG_VOICE_CHUNK -> play PCM through a MAX98357A over I2S (SCAFFOLD/TODO).
 //
-// NOTE: build requires the ESP8266 platform, which is not installed by default:
-//   pio pkg install -e indoor_chime   (needs network)
-// This file has therefore NOT been compiler-verified in this environment.
+// Build: pio run -e indoor_chime  (ESP8266 platform installed). Compiles clean.
 
 #include <ESP8266WiFi.h>
 #include <espnow.h>

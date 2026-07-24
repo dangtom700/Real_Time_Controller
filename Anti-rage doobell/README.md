@@ -103,9 +103,13 @@ include/config.h        pins + timing, shared
 include/protocol.h      ESP-NOW message structs, shared
 src/door_panel/main.cpp Nano ESP32 firmware (M1+M2 working, M3 scaffold)
 src/indoor_chime/main.cpp ESP8266 firmware (M2 working, M3 scaffold)
+src/diag/<name>/        one standalone test per component (see TESTING.md)
 ```
 Build the door panel: `pio run -e door_panel` · flash: `pio run -e door_panel -t upload`.
-The `indoor_chime` env needs the ESP8266 platform first: `pio pkg install -e indoor_chime`.
+Both platforms are installed; every env (including `indoor_chime`) compiles clean.
+
+**Bringing it up?** Don't flash the full firmware first — see **[TESTING.md](TESTING.md)** for the
+component-by-component test ladder (`pio run -e diag_<name> -t upload -t monitor`).
 
 ## Open decisions (your call — cheap to change)
 1. **Node roles** — is the Nano ESP32 the *door/outdoor* panel and the ESP8266 the *indoor*
