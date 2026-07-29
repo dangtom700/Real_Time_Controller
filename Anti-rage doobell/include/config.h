@@ -39,3 +39,9 @@ static const uint32_t INTERCOM_MAX_MS = 15000; // intercom auto-timeout safety c
 //  Indoor chime — ESP8266
 // ============================================================================
 #define CHIME_BUZZER_PIN 14  // GPIO14 = D5. ESP8266 I2S-out pins are fixed (M3).
+
+// ============================================================================
+//  Bench jig — Arduino Mega 2560. Not a node; only proves a buzzer works on its
+//  own, on known-good 5V hardware, before blaming the ESP32 wiring.
+// ============================================================================
+#define MEGA_BUZZER_PIN 8    // any digital pin; tone() owns Timer2, so avoid D9/D10 PWM
