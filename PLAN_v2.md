@@ -15,7 +15,7 @@ Two parallel codebases, both real, neither matching the diagrams:
 
 | Tree | Target | State |
 |---|---|---|
-| `Anti-rage doobell/` | Nano ESP32 + ESP8266, ESP-NOW | M1/M2 working, M3 intercom is a `TODO` scaffold, M4 GIFs not started. 12 diag envs, all compiling. |
+| `Anti-rage doobell/` | Nano ESP32 + ESP8266, ESP-NOW | M1/M2 working, M3 intercom is a `TODO` scaffold, the screen art not started. 12 diag envs, all compiling. |
 | `Doorbell_{Sender,Receiver}_Side/` + `Doorbell_Shared/` | one Mega 2560, serial-as-radio | **More complete on logic than the ESP build.** Full state machine, real 8 kHz PCM engine (Timer1 PWM carrier + Timer3 CTC clock), ILI9341 TFT, LM386 chain, rage lockout end-to-end. |
 
 The Mega bench is good work and is not wasted — see §6. But it proves neither the radio nor
@@ -65,24 +65,28 @@ The firmware does the opposite — [`main.cpp:63-68`](Anti-rage%20doobell/src/do
 early-returns from `playDingDong()` once `locked` is set, and the Mega bench mirrors it. Under
 the diagrams the punishment is *visual*, and the guest still gets their ding-dong.
 
-### 2.3.1 Three presses, three ding-dongs, three GIFs — one clamped index
+### 2.3.1 Three presses, three ding-dongs, three images — one clamped index
 
-Settled: **the press limit, the ding-dong count and the GIF count are all 3, by design.** Press
-*n* inside timer 1 plays ding-dong *n* and GIF *n*. That collapses the workflow diagram's
+Settled: **the press limit, the ding-dong count and the image count are all 3, by design.** Press
+*n* inside timer 1 plays ding-dong *n* and shows image *n*. That collapses the workflow diagram's
 two-way branch — *if >3 → Play GIF#3* versus *Play a GIF from a presetted map* — into a single
 clamped lookup:
 
 ```c
 playDingDong();                       // every press, never muted (2.3)
-showGif(gifMap[min(pressCount, GIF_COUNT) - 1]);
+showImage(imgMap[min(pressCount, IMAGE_COUNT) - 1]);
 ```
 
-with `RAGE_LIMIT == GIF_COUNT == 3`. They are not two constants that happen to match; they are
-one constant. GIF#3 is not a special "rage" case in the code — it is simply the last entry, and
-the clamp is what makes a 4th, 5th and 6th press keep landing on it. This also answers open
-decision 3: the diagram's `>3` is `>= 3` after clamping, and it needs no separate branch.
+with `RAGE_LIMIT == IMAGE_COUNT == 3`. They are not two constants that happen to match; they are
+one constant. The diagram's GIF#3 is not a special "rage" case in the code — it is simply the
+last entry, and the clamp is what makes a 4th, 5th and 6th press keep landing on it. This also
+answers open decision 3: the diagram's `>3` is `>= 3` after clamping, and it needs no separate
+branch.
 
-### 2.4 GIF playback is the main path, not a stretch goal
+The lookup shape is what the diagrams actually constrain, and it is **identical whether the entry
+is a still or an animation** — §2.4 swaps the payload for prototype 1 without touching this.
+
+### 2.4 The screen is the main path, not a stretch goal — but prototype 1 draws stills
 
 In all three logic diagrams the terminal action of the button branch is *Play GIF#3* or *Play a
 GIF from a presetted map*. The OLED showing `!!!` and a bouncing 8×8 block
@@ -90,7 +94,28 @@ GIF from a presetted map*. The OLED showing `!!!` and a bouncing 8×8 block
 does not satisfy this. The current README files it as **M4 — polish (stretch)**. It should be
 M2.
 
-This is also the requirement that decides the hardware (§3).
+**Decided for prototype 1: three *static* images, not three GIFs.** The count→art map, the
+clamp, the escalation and the panel are all unchanged; only the payload per entry changes. This
+is a deliberate load reduction for the first build, and it buys three things:
+
+- **The decoder disappears.** No `AnimatedGIF`, no LZW, no frame pacing, no per-frame callback.
+  A raw RGB565 still is blitted straight from flash to the panel (§10.1).
+- **The one unmeasured claim in the plan goes away.** §7.2 open decision 1 — *does a 160 MHz
+  single-core RISC-V decode 240×240 GIF at 10 fps?* — is the only assertion here not derivable
+  from a datasheet, and the display architecture was resting on it. A still needs **zero**
+  decode, so the question comes off the prototype's critical path entirely (§10.3).
+- **The SPI load drops from sustained to one-shot.** 1.15 MB/s continuous while an animation
+  runs becomes a single ~115 KB burst per press. That is what makes §3.1's timing argument
+  stop mattering at all.
+
+What it costs is the brain-rot effect itself — a still meme is meaningfully less funny than a
+looping one, and that effect is the project's identity (§9.2). So this is a **prototype-1
+simplification, not a retraction**: animation returns as **M7** (§5), against the spec preserved
+in §10.6, once the panel, the map and the state machine are proven with something that cannot
+fail for timing reasons.
+
+This is also the requirement that decides the hardware (§3) — and §10 shows the still-image
+version decides it the same way, only more comfortably.
 
 ### 2.5 Two timers, deliberately different durations
 
@@ -162,7 +187,7 @@ Read from the datasheets in the repo root.
 
 | Board | MCU | Clock | RAM | Flash | Radio | The one fact that matters |
 |---|---|---|---|---|---|---|
-| **Arduino Nano ESP32** | ESP32-S3 (NORA-W106-10B) | 2×240 MHz LX7 | 512 KB + **8 MB PSRAM** (octal) | 16 MB | WiFi/BLE | Only board here with the RAM *and* the bandwidth for GIF playback. **2 I2S controllers.** |
+| **Arduino Nano ESP32** | ESP32-S3 (NORA-W106-10B) | 2×240 MHz LX7 | 512 KB + **8 MB PSRAM** (octal) | 16 MB | WiFi/BLE | Only board here with the RAM *and* the bandwidth for full **animation** playback — which prototype 1 no longer needs (§2.4). **2 I2S controllers.** |
 | **ESP32-C6-WROOM-1** | ESP32-C6 RISC-V | 160 MHz | 512 KB HP + 16 KB LP | 4/8/16 MB, **no PSRAM** | WiFi 6, BLE 5.3, 802.15.4 | 7 µA deep sleep with wake on **LP_GPIO0–7 only**. I2S on any GPIO. |
 | **ESP8266MOD** | ESP8266EX | 80/160 MHz | ~50 KB usable heap | 4 MB typ. | WiFi | **I2S-out data pin is GPIO3 = U0RXD.** Turning on audio output costs you the serial console. |
 | **Adafruit Metro M4 Express** | ATSAMD51J19A | 120 MHz M4F | 192 KB | 512 KB + **2 MB QSPI** | **none** | No radio ⇒ no deadlines to miss. 192 KB RAM ≈ one 240×320 framebuffer. **The display MCU** (§3.1). |
@@ -189,25 +214,27 @@ lands somewhere legal. The Nano ESP32 is roomier at 20, but not by much.
 
 The pin argument alone would be survivable. The timing argument is not.
 
-**The timing argument — weaker than I first claimed.** The audio path has a **13.75 ms** deadline
-(one `VoiceMsg` = 110 samples at 8 kHz), and a 150 KB full-frame repaint is ~15 ms of SPI even at
-80 MHz, so on one MCU every screen update is a candidate to blow a chunk. *But* GIF playback
-hangs off **button 1** and voice streaming off **button 2**, and the diagrams never run them
-together — during a voice session the screen shows a static banner, which is negligible SPI
-traffic. The two workloads are very nearly mutually exclusive, so this is a robustness argument,
-not a correctness one. Stated honestly so it is not doing more work than it can bear.
+**The timing argument — weaker than I first claimed, and weaker again with stills.** The audio
+path has a **13.75 ms** deadline (one `VoiceMsg` = 110 samples at 8 kHz), and a 150 KB full-frame
+repaint is ~15 ms of SPI even at 80 MHz, so on one MCU every screen update is a candidate to blow
+a chunk. *But* the art hangs off **button 1** and voice streaming off **button 2**, and the
+diagrams never run them together — during a voice session the screen shows a static banner, which
+is negligible SPI traffic. The two workloads are very nearly mutually exclusive, so this is a
+robustness argument, not a correctness one. Stated honestly so it is not doing more work than it
+can bear. With prototype 1 on stills (§2.4) the screen's entire SPI budget is **one burst per
+press** instead of 1.15 MB/s sustained, and the argument all but vanishes.
 
-**The deciding argument was GIF storage — and §10 resolves it in favour of *not* splitting.**
-Raw frame storage is brutal (13.5 MB for three full-screen animations), but real LZW-compressed
-`.gif` files are ~20× smaller and a C6 holds a full framebuffer in SRAM. See §10 for the spec
-and the consequence: **one C6 drives the panel directly.**
+**The deciding argument was art storage — and §10 resolves it in favour of *not* splitting.**
+Raw *animation* frame storage is brutal (13.5 MB for three full-screen animations), but three
+raw RGB565 **stills** are **337 KB total** — they fit in the app image with no filesystem at all.
+See §10 for the spec and the consequence: **one C6 drives the panel directly.**
 
 **So: give the screen its own MCU.** §9 argues that MCU should be the Nano ESP32.
 
 ```
    guest node (C6)                      display MCU (S3)
    buttons, mic, buzzer, radio  --TX-->   ILI9341
-   9 signals of 16                        7 signals, GIFs in 16 MB flash
+   9 signals of 16                        7 signals, art in 16 MB flash
 ```
 
 The guest node drops to **9 signals** (2 buttons + 3 mic + 1 buzzer + 1 UART TX + 2 LEDs) out of
@@ -278,7 +305,7 @@ Mega already does that. Its 3.3 V/5 V switch makes it a convenient level-safe te
                v                                 v
 ┌─ DISPLAY ─ Nano ESP32 / S3 ──┐   ┌─ HOST / indoor ─ ESP32-C6 ─────┐
 │  2.2" 240x320 ILI9341        │   │  Buzzer      (the chime)       │
-│  GIF library in 16 MB flash  │   │  MAX98357A + speaker (I2S TX)  │
+│  image set in 16 MB flash    │   │  MAX98357A + speaker (I2S TX)  │
 │  no microSD, no radio        │   │  2 status LEDs                 │
 │  no deadlines to miss        │   │  no buttons -> never sleeps,   │
 │  7 signals                   │   │  mains powered.  6 of 16       │
@@ -371,15 +398,18 @@ chance of failing**, and §9.4's BLE fallback stops being academic. Budget for i
 | **M0** | **Toolchain.** arduino-esp32 2.0.17 → 3.x. Add `[env:indoor_c6]` and a SAMD51 env. Re-verify all 12 diag envs build. Test `esp_deep_sleep_enable_gpio_wakeup()` on the S3. | S3, C6, M4 | 12 diags + firmwares build on 3.x; wake-mode question answered. |
 | **M1** | **Door panel core, corrected to the diagrams.** Timer 1 = 30 s (one constant), timer 2 = 3 min. Ding-dong on every valid press. Counter saturates at 3. Explicit "link alive?" sleep gate. | S3 | `diag_logic` shows counter 1,2,3,3,3… with sound on every press. |
 | **M2** | **`link.h`.** Promote `sim_link.h` to a real transport interface with `LINK_SERIAL` / `LINK_ESPNOW` backends. | S3 | Same `DoorbellMsg`/`VoiceMsg` bytes move over a wire between two boards. |
-| **M3** | **The brain-rot screen on its own MCU.** ILI9341 + microSD on the Metro M4; UART command channel from the S3; count→animation map with GIF#3 on the rage branch. Retire the OLED. | S3 + M4 | 3 presses inside 30 s ⇒ three animations, the third GIF#3, with no effect on S3 timing. |
+| **M3** | **The brain-rot screen — static art.** ILI9341 on the guest node; count→image map, three raw RGB565 stills baked into flash, the third on the clamped rage branch. No decoder, no microSD, no filesystem. Retire the OLED. | guest node (S3 under Plan A, C6 under Plan D) | 3 presses inside 30 s ⇒ three different stills, the third sticking for presses 4+, with no effect on timing. |
 | **M4** | **Voice over the wire.** INMP441 → `link.h` → MAX98357A, half-duplex, both directions. | S3 + C6 | Intelligible speech both ways over UART. Audio proven independent of the radio. |
 | **M5** | **Cut the wire.** Swap the backend to `LINK_ESPNOW`. Session-scoped `init`/`deinit`; re-init after wake. | S3 + C6 | Same speech quality wirelessly, or a measured reason why not. |
 | **M6** | **Power.** Deep sleep on both nodes, wake on button. | S3 + C6 | Measured idle current; wake press counts as press #1. |
+| **M7** | **Animation (stretch).** Swap the three stills for three `.gif`s against the §10.6 spec: `diag_gif` fps measurement first, then `AnimatedGIF` + LittleFS behind the same `showImage()` seam. | C6 (S3 fallback) | ≥10 fps on the panel, or a measured reason to fall back to §10.3's ladder. |
 
-Two orderings are deliberate. **M3 before the voice work**: the screen is the project's identity,
-it is entirely local, and it now lives on a board with no deadlines — it can be finished while
-the radio question is still open. **M4 before M5**: prove the audio over a link that cannot drop
-a packet, *then* introduce one that can.
+Three orderings are deliberate. **M3 before the voice work**: the screen is the project's
+identity, it is entirely local, and — now that it draws stills — it has no deadline of its own,
+so it can be finished while the radio question is still open. **M4 before M5**: prove the audio
+over a link that cannot drop a packet, *then* introduce one that can. **M7 last**: animation is
+the one thing in the plan whose feasibility is not derivable from a datasheet (§10.3), so it must
+not sit upstream of anything. Prototype 1 is complete at M6.
 
 ### 5.1 The one number to watch
 
@@ -411,8 +441,15 @@ Keep it. It is the cheapest place to iterate on logic, and these parts port dire
   project's transport interface rather than a simulation hack. This is the single most valuable
   thing the bench produced.
 
-What it will never prove: the radio, deep sleep, a real microphone, and — now — GIF playback,
-which is out of the Mega's SPI budget and has moved to the Metro M4 (§3.1).
+What it will never prove: the radio, deep sleep, and a real microphone.
+
+**Static art puts the screen back in the bench's reach**, which animation never was. The Mega's
+8 MHz SPI ceiling (~1 MB/s) makes a 240×240 still a **~115 ms** repaint and its 256 KB flash
+cannot hold three of them — but at **128×128** the numbers are 32 KB and ~33 ms each, 96 KB for
+the set, which the Mega can carry alongside the existing sketch. So the count→image map and the
+clamp can be debugged on the bench that already drives an ILI9341
+([`Doorbell_Sender_Side/src/main.cpp:325`](Doorbell_Sender_Side/src/main.cpp#L325)) before any C6
+exists. The art ships at 240×240 on the real target; the bench proves the logic, not the pixels.
 
 ---
 
@@ -424,9 +461,11 @@ which is out of the Mega's SPI budget and has moved to the Metro M4 (§3.1).
   presses), timer 2 = 3 min (voice session). `INTERCOM_MAX_MS` changes 15 s → 180 s;
   `RAGE_WINDOW_MS`/`IDLE_SLEEP_MS` collapse into one timer-1 constant.
 - **Doorbell crosses the wall.** The host has a buzzer, so `MSG_DOORBELL` stays (§2.2).
-- **The chime is never muted.** Three presses, three ding-dongs, three GIFs; escalation is
+- **The chime is never muted.** Three presses, three ding-dongs, three images; escalation is
   visual (§2.3, §2.3.1).
-- **`RAGE_LIMIT == GIF_COUNT == 3`,** one clamped index, no special rage branch (§2.3.1).
+- **`RAGE_LIMIT == IMAGE_COUNT == 3`,** one clamped index, no special rage branch (§2.3.1).
+- **Prototype 1 shows static images, not GIFs** (§2.4). Raw RGB565 baked into the firmware, no
+  decoder, no filesystem, no microSD. Animation is M7, against the spec kept in §10.6.
 - **Voice is simplex,** guest → host. No talk-back; drop the half-duplex framing (§2.7).
 - **Guest sleeps, host does not.** The host has no buttons, so no wake source; it is
   mains-powered and always listening (§2.7).
@@ -438,12 +477,15 @@ which is out of the Mega's SPI budget and has moved to the Metro M4 (§3.1).
 
 ### 7.2 Still open
 
-1. **Does the C6 hit 10 fps decoding a 240×240 GIF?** (§10.3) The only claim in this plan not
-   derivable from a datasheet, and the display architecture rests on it. One `diag_gif` env
-   answers it in an hour. **Do this before wiring anything.**
+1. ~~**Does the C6 hit 10 fps decoding a 240×240 GIF?**~~ — **deferred to M7, off the critical
+   path.** This was the only claim in the plan not derivable from a datasheet, and the display
+   architecture was resting on it. Prototype 1's stills need zero decode (§10.3), so the
+   question no longer blocks wiring, ordering or board allocation. The `diag_gif` env is still
+   worth an hour — but *after* M6, and now it can only cost the stretch goal.
 
-2. **Which C6 flash variant?** N4 (4 MB) makes the 1.5 MB GIF budget tight; N8/N16 make it a
-   non-issue. Check the module marking.
+2. ~~**Which C6 flash variant?**~~ — **no longer load-bearing.** The 1.5 MB GIF budget was what
+   made an N4 (4 MB) tight; three stills are **337 KB in the app image** and fit any variant on
+   a single-app partition scheme (§10.2). Still worth reading off the module marking before M7.
 
 3. **Is the guest battery-powered at all?** The whole deep-sleep design assumes it is. If the
    door module can be mains-fed, timer-1-to-sleep becomes display blanking rather than a power
@@ -456,7 +498,8 @@ which is out of the Mega's SPI budget and has moved to the Metro M4 (§3.1).
 
 ## 8. Immediate next steps
 
-1. Answer decisions 1, 2 and 4 — they change M1 and M5.
+1. Answer decision 4 — it changes M1 and M5. Decisions 1 and 2 are deferred with the animation
+   (§7.2) and no longer gate anything.
 2. Apply the constant changes now, they are free: `INTERCOM_MAX_MS` → 180000, and collapse
    `RAGE_WINDOW_MS`/`IDLE_SLEEP_MS` into one timer-1 constant. Both files
    ([`config.h`](Anti-rage%20doobell/include/config.h),
@@ -464,8 +507,10 @@ which is out of the Mega's SPI budget and has moved to the Metro M4 (§3.1).
 3. Migrate to arduino-esp32 3.x and confirm the 12 diags still build (M0).
 4. Test S3 deep-sleep GPIO wake on 3.x. If it works, drop the external pull-downs from the
    wiring docs and flip `BTN_ACTIVE_LEVEL` back.
-5. Bring up the display MCU with the ILI9341 and get one hard-coded frame sequence on screen,
-   driven by a byte over UART. It is the riskiest unproven thing left that a wire cannot rescue.
+5. Bring up the ILI9341 on the guest C6 and get **one hard-coded RGB565 still** on screen from a
+   `const uint16_t[]` in flash — no decoder, no card, no filesystem. Then wire it to the clamped
+   index (§2.3.1) so three presses give three stills. Converting the art is a one-line Pillow
+   script (§10.1); the panel bring-up is the only real work.
 
 ---
 
@@ -481,10 +526,11 @@ and one C6 I²S controller can run mic and amp simultaneously, the boards can be
 | **Plan C** | C6 | C6 | Nano ESP32 (S3) | Metro M4, 8266, Seeeduino |
 | **Plan D** ⭐ | **C6 + panel** | **C6** | *(none)* | S3, Metro M4, 8266, Seeeduino |
 
-> **Plan D is the recommendation**, on the strength of §10: with real compressed `.gif` files the
-> storage argument that forced a separate display MCU evaporates, and the C6's 512 KB SRAM holds
-> a full framebuffer. Two boards, no microSD, no power-gating problem. Plans A–C survive as
-> documented fallbacks if §10.3's decode measurement disappoints.
+> **Plan D is the recommendation**, on the strength of §10: three raw RGB565 stills are 337 KB
+> in the app image, so the storage argument that forced a separate display MCU evaporates — and
+> with no decoder there is nothing left for the C6 to be too slow at. Two boards, no microSD, no
+> filesystem, no power-gating problem. Plans A–C survive as documented fallbacks, but only M7
+> (animation) can now call on them.
 
 ### 9.1 Same chip, not the same node — corrected
 
@@ -528,10 +574,15 @@ If the S3 is not needed on a node, it should go where it is strongest:
 Dropping the microSD is worth more than it looks: it removes a card slot, a filesystem, a
 card-detect failure mode, and the floating-`SDCS`-corrupts-MISO trap that
 [`Doorbell_Shared/README.md`](Doorbell_Shared/README.md) already documents as a real hazard.
-The GIF library ships inside the firmware image.
+The art ships inside the firmware image.
 
 The screen is the project's identity, and Plan C is the only allocation that gives it the best
 silicon in the box.
+
+**This whole comparison is about *animation*, so it is now an M7 argument, not a prototype-1
+one.** Three 240×240 stills are 337 KB and need no decoder, which every board in the table
+clears trivially — the S3's advantage only reappears if §10.3's fps measurement goes badly.
+Filed here so it is ready when M7 needs it.
 
 ### 9.2.1 The cost of splitting: the guest becomes two boards
 
@@ -544,8 +595,8 @@ to deep-sleep. Two consequences to design for:
   put it in deep sleep and wake it over the UART line. Do not leave it idling at 40 mA next to a
   node whose whole point is 7 µA.
 - **Packaging.** Two boards and a panel is a chunky door unit. If that is unacceptable, the
-  single-C6 layout in §3.1 is the fallback — and the GIF-storage table there is what decides
-  whether it is viable.
+  single-C6 layout in §3.1 is the fallback — and with stills (§10) that layout is simply viable,
+  so this cost is one prototype 1 does not pay at all.
 
 ### 9.3 The cost of Plan C, stated plainly
 
@@ -582,54 +633,79 @@ first fallback if ESP-NOW's ack rate disappoints, ahead of dropping the sample r
 Only the board column. §5's M0–M6 stand as written, with:
 
 - **M0** adds a second C6 env instead of a SAMD51 env; the S3 env becomes the display target.
-- **M3** targets the S3 for the display and gains a task: the GIF library moves into the 16 MB
-  flash image, so there is no microSD bring-up at all.
+- **M3** targets the S3 for the display and gains a task: the art moves into the 16 MB flash
+  image, so there is no microSD bring-up at all. Under Plan D with stills, M3 has no separate
+  display target and no UART command channel either — the panel hangs off the guest C6 directly.
 - **M4/M5** are unaffected by the display choice.
 
 ---
 
-## 10. Recommended GIF specification
+## 10. Image specification — stills for prototype 1
 
-The storage table in §3.1 assumed **raw** frames. That was the wrong unit: a real `.gif` is
-8-bit palettised **and LZW-compressed with inter-frame differencing**, which is roughly 20×
-smaller than raw for cartoon and meme content. Sizing against raw frames overstates the problem
-by more than an order of magnitude, and it was pushing the architecture toward a board it does
-not need.
+The storage table in §3.1 assumed **raw animation frames**, and pushed the architecture toward a
+board it does not need. Two things fix that, and the second is enough on its own:
+
+- a real `.gif` is 8-bit palettised **and LZW-compressed with inter-frame differencing** — ~20×
+  smaller than raw for cartoon and meme content (kept in §10.6, it is still the M7 target);
+- **prototype 1 shows one still per press count** (§2.4), which removes the frame dimension from
+  the storage question altogether and the decoder from the runtime.
 
 ### 10.1 The spec
 
 | Parameter | Recommended | Why |
 |---|---|---|
-| **Format** | animated `.gif`, native 8-bit palette | LZW + frame differencing for free; authoring tools everywhere |
+| **Format** | **raw RGB565**, `const uint16_t[]` in the firmware image | The panel's native pixel format. **No decoder at all** — no `AnimatedGIF`, no PNG, no JPEG, no library to add |
 | **Resolution** | **240 × 240** | Square is the native aspect of meme content; leaves a 240×80 strip on the 240×320 panel for the press count and `WAIT.` |
-| **Frame rate** | **10 fps** (GIF delay = 10 cs) | Native GIF cadence; 12 fps is fine, above 15 buys nothing |
-| **Duration** | **2–3 s** ⇒ 20–30 frames | Longer than the 460 ms ding-dong, short enough not to straddle the next press |
-| **Palette** | ≤256, per-GIF optimised | GIF native; dither photographic sources |
-| **File size** | **≤ 500 KB each, ≤ 1.5 MB total** | The budget that makes everything below fit |
-| **Loop** | play once per press | Escalation is per-press, not continuous |
+| **Count** | **3** | One per press count — same clamped index as §2.3.1 |
+| **Size** | **112.5 KB each, 337.5 KB total** | 240×240×2 B, uncompressed. Small enough that compressing it would be work for nothing |
+| **Storage** | baked into the app image | **No LittleFS, no `uploadfs` step, no microSD, no card-detect failure mode** |
+| **RAM at runtime** | **0 bytes** | ESP32 flash is memory-mapped: blit straight from the `const` array to SPI. No framebuffer, no decode buffer |
+| **Draw time** | **~12–23 ms**, once per press | 112.5 KB at the C6's 5–10 MB/s effective SPI |
+| **Persistence** | drawn on press, held until the next press or timer-1 expiry | §10.5 |
 
-### 10.2 Why that fits a single C6 — three checks
+Authoring is a conversion, not a pipeline — resize to 240×240 and pack to RGB565:
 
-- **Storage.** 3 × 500 KB = **1.5 MB** in a LittleFS partition (`pio run -t uploadfs`).
-  Comfortable on a C6-N8 (8 MB); workable on an N4 (4 MB) with ~1.5 MB of app.
-  **No microSD, no 16 MB flash, no S3.** *(Check which N-variant your modules are.)*
-- **RAM.** The C6 has **512 KB SRAM**. The `AnimatedGIF` decoder (bitbank2) needs ~32 KB in
-  per-line-callback mode; a *full* 240×240 RGB565 framebuffer is only 112.5 KB if you want
-  tear-free double buffering. Either fits with room to spare — **the S3's 8 MB PSRAM buys
-  nothing here.**
-- **Bandwidth.** 240×240×2 B × 10 fps = **1.15 MB/s**. The C6's GP-SPI runs to 80 MHz ⇒
-  5–10 MB/s. A 4–8× margin.
+```python
+from PIL import Image
+im = Image.open("meme.png").convert("RGB").resize((240, 240))
+px = [(r >> 3 << 11) | (g >> 2 << 5) | (b >> 3) for r, g, b in im.getdata()]   # 57600 px
+print("const uint16_t img1[] = {" + ",".join(f"0x{v:04X}" for v in px) + "};")
+```
 
-### 10.3 The one number to measure
+Two gotchas worth knowing before they cost an evening: keep the array as `uint16_t` and let
+`drawRGBBitmap()` handle the byte order — hand-rolling a `uint8_t` blob means getting the
+panel's big-endian pixel order right yourself; and if SPI DMA is ever enabled in the Adafruit
+driver, DMA cannot always source from memory-mapped flash, so stage a row at a time in RAM
+(480 B) rather than passing the flash pointer straight down.
 
-Everything above is derivable from datasheets except **LZW decode throughput on a 160 MHz
-single-core RISC-V**. An ESP32-S3 does 240×240 GIF at 30+ fps; the C6 should manage 15–25, and
-the target is 10 — but that is an extrapolation, not a spec.
+### 10.2 Why that fits a single C6 — the same three checks, all slack now
 
-**Measure it first.** A `diag_gif` env that decodes one bundled GIF to the panel and prints
-achieved fps is an hour's work and it de-risks the entire display architecture. If the C6 falls
-short, the fallbacks in order are: drop to 8 fps → shrink to 160×160 → move the panel to the S3
-(Plan C).
+- **Storage.** 3 × 112.5 KB = **337.5 KB** of `const` data inside the app partition. One caveat,
+  and it is the only one: the default dual-OTA scheme on a 4 MB module gives ~1.25 MB per slot,
+  and an ESP-NOW firmware is already ~0.9 MB — 337 KB on top of that is genuinely tight. Use
+  `board_build.partitions = huge_app.csv` (single ~3 MB app), which a doorbell prototype has no
+  reason not to; then even a C6-**N4** is comfortable and the flash-variant question (§7.2) stops
+  mattering. **No microSD, no 16 MB flash, no S3, no filesystem.**
+- **RAM.** **Zero.** Not "fits in 512 KB" — the still is never in RAM at all. The S3's 8 MB
+  PSRAM buys nothing here, and neither does the C6's SRAM.
+- **Bandwidth.** One **115 KB burst per press**, ~12–23 ms, versus the 1.15 MB/s *sustained*
+  that animation would have demanded. Even against the 13.75 ms audio deadline that burst is a
+  single-chunk event on a path §3.1 already shows is mutually exclusive with voice.
+
+### 10.3 There is no number left to measure
+
+This is the real reason for the swap. Everything in §10.6 is derivable from datasheets **except
+LZW decode throughput on a 160 MHz single-core RISC-V** — an ESP32-S3 does 240×240 GIF at
+30+ fps and the C6 *should* manage 15–25 against a target of 10, but that is an extrapolation,
+not a spec, and the entire display architecture was resting on it.
+
+A still decodes at infinite fps. Prototype 1 therefore contains **no unmeasured claim**, and
+board allocation, wiring and milestone order can all be committed to now.
+
+The measurement still has to happen before **M7**. When it does, a `diag_gif` env that decodes
+one bundled GIF to the panel and prints achieved fps is an hour's work; if the C6 falls short the
+fallbacks in order are: drop to 8 fps → shrink to 160×160 → move the panel to the S3 (Plan C).
+The difference is that failing now costs a stretch goal instead of the design.
 
 ### 10.4 What this collapses
 
@@ -644,15 +720,44 @@ With the panel on the guest C6, the guest is **14 of 16 signals** — it fits, w
 | Status LEDs ×2 | IO6, IO7 | the nice-to-have, and it fits |
 | *spare* | IO0, IO1 | |
 
-Host node is 6 of 16 (I²S TX ×3, buzzer, 2 LEDs) — trivial.
+Host node is 6 of 16 (I²S TX ×3, buzzer, 2 LEDs) — trivial. The pin map is **unchanged by the
+still-image switch** — it was already assuming no microSD — which is the point: this is a
+payload change, not an architecture change.
 
 **So the recommended build is two boards, not three:** guest C6 with the panel attached, host C6,
 and the S3 and Metro M4 both return to the spares bin. Plan C's two-MCU guest, its power-gating
 problem (§9.2.1) and its packaging bulk all disappear.
 
-### 10.5 One state-machine consequence
+### 10.5 One state-machine consequence — and it gets simpler
 
-A 2–3 s GIF is longer than the gap between angry presses. **Policy: a new press interrupts the
-running animation and restarts with the next GIF** — immediate feedback is the whole point, and
-queueing would make the screen lag the button. The clamp in §2.3.1 means press 4+ simply
-restarts GIF#3, which reads correctly as "still waiting."
+Under animation this was a real problem: a 2–3 s GIF is longer than the gap between angry
+presses, forcing a policy that **a new press interrupts the running animation and restarts with
+the next GIF**, plus the state to track "currently playing."
+
+With stills there is nothing to interrupt. `showImage()` is a **synchronous ~20 ms blit** that
+has finished before the next press can arrive, so the screen is a **pure function of
+`pressCount`** with no animation state, no queue and no cancellation path. The image simply
+stays up until the next press replaces it or timer 1 expires and the panel blanks on the way to
+sleep. The clamp in §2.3.1 means press 4+ redraws image 3 — visually a no-op, which reads
+correctly as "still waiting."
+
+That pure-function property is also what makes M3 testable on the Mega bench (§6) and what lets
+M7 slot animation back in behind the same call.
+
+### 10.6 The GIF spec, preserved for M7
+
+Unchanged from the original §10 and still the target once the panel and the map are proven:
+
+| Parameter | Recommended | Why |
+|---|---|---|
+| **Format** | animated `.gif`, native 8-bit palette | LZW + frame differencing for free; authoring tools everywhere |
+| **Resolution** | **240 × 240** | Same frame as the stills, so the layout does not change |
+| **Frame rate** | **10 fps** (GIF delay = 10 cs) | Native GIF cadence; 12 fps is fine, above 15 buys nothing |
+| **Duration** | **2–3 s** ⇒ 20–30 frames | Longer than the 460 ms ding-dong, short enough not to straddle the next press |
+| **Palette** | ≤256, per-GIF optimised | GIF native; dither photographic sources |
+| **File size** | **≤ 500 KB each, ≤ 1.5 MB total** | 3 × 500 KB in a LittleFS partition (`pio run -t uploadfs`); comfortable on an N8, workable on an N4 |
+| **Loop** | play once per press | Escalation is per-press, not continuous |
+
+M7 brings back with it: the `AnimatedGIF` decoder (~32 KB RAM in per-line-callback mode), a
+LittleFS partition and its upload step, the flash-variant question, and §10.5's interrupt policy.
+Four things prototype 1 does not carry.
