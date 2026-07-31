@@ -31,34 +31,41 @@ swaps — check the MAC, never the port number.
 | step_io — buttons | ✅ working, debounce verified against real bounce |
 | step_io — buzzer | ✅ works on board C's D4; never worked on A's IO3 |
 | Mic (A, IO6) | wired, **untested** |
-| Amp (B) | wired, **untested** — BCLK still on the wrong pin |
+| Step 5 — link side | ✅ lost=0, i2s=1393/rx=1405, costs the link nothing |
+| Step 5 — audio | ⛔ **PARKED.** Amp receives data but far too quiet to judge. Never heard properly |
 | A → C link | designed, **not built** |
 | OLED | not started |
 | Zigbee fallback | not built |
 
 ## Do these first
 
-1. **Move BCLK on board B from IO8 to IO11.** One jumper. IO8 is the DevKitC-1's
-   RGB LED (`PIN_RGB_LED 8`) *and* a C6 boot-mode strapping pin; a continuous
-   bit clock there causes intermittent boot failures, which is a far worse bug
-   to chase later than to prevent now. `config_v1.h` already says IO11.
-
-2. **Wire the A → C link**, two signal wires plus ground:
+1. **Wire the A → C link**, two signal wires plus ground:
    ```
    A IO0   ──> C D0 (GPIO44)   message, 115200 8N1
    A IO10  ──> C D2 (GPIO5)    wake ── 10 kΩ ── GND
    A GND   ─── C GND
    ```
 
-3. **Build a `step_panel` env** to prove that link before the OLED or the state
+2. **Build a `step_panel` env** to prove that link before the OLED or the state
    machine depends on it — A sending on a timer, C echoing what it decodes.
    The sequencing is the risky part: assert wake, wait `PANEL_WAKE_MS` (300 ms)
    for C to boot, *then* send. Get the order wrong and it fails only when C
    happens to be asleep, which a bench rarely reproduces.
 
-4. **Test the mic** on A's IO6. Sample with `analogContinuous()` (ADC DMA), not
+3. **Test the mic** on A's IO6. Sample with `analogContinuous()` (ADC DMA), not
    `analogRead()` — the design rests on a 13.75 ms deadline and `analogRead()`
    jitter lands straight in the `gap-max` that step 2 calibrated.
+
+4. **Audio is parked, not broken — resume it with the two cheap levers.** Read
+   README §Step 5 *What the bring-up established* first; it records which
+   results from that session are real and which are void. Short version: the
+   amp works and is simply too quiet, GAIN is still unconnected at 9 dB, and
+   `voice_tx` sends quarter-scale samples. Try **GAIN → GND** before writing any
+   code. Do **not** assume 8 kHz is broken — it was never fairly tested.
+
+   Only one USB cable reaches the bench, and it currently sits on board B
+   (COM8); board A runs off the shared 5 V rail. Moving it back is what makes
+   board A visible again.
 
 ## Unresolved
 
@@ -92,6 +99,13 @@ comments too, but they are the ones that block work outright.
   machine, so no COM port. The native port needs **both**
   `-DARDUINO_USB_CDC_ON_BOOT=1` and `-DARDUINO_USB_MODE=1`; with `MODE=0` the
   core resolves `Serial` to `USBSerial`, which does not exist on a C6.
+- **An upload that fails with `UnicodeEncodeError: 'charmap' codec` is hiding
+  the real error.** PlatformIO's error printer writes non-ASCII through the
+  console's cp1252 codepage and dies mid-message, so `[upload] Error 4294967295`
+  is all you get and the actual cause is lost. Set `PYTHONIOENCODING=utf-8` for
+  the command and the real message comes back. (An upload can also just hang on
+  the first connect — one did here for 13 minutes at 0% CPU, then succeeded on a
+  straight retry with nothing else changed.)
 - **`*** [upload] Error 2` usually means the monitor is holding the port.**
   Windows serial access is exclusive. Close the monitor, or upload from the IDE
   which releases it.

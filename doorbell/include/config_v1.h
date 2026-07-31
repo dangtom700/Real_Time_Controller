@@ -167,15 +167,24 @@ static const uint8_t  IMAGE_COUNT = 3;       // == RAGE_LIMIT, one constant (§2
 //  through an RC reconstruction filter.  I2S straight into the MAX98357A skips
 //  that whole problem, and the part is happy on the 5V rail (2.5-5.5V).
 // ===========================================================================
-// LRC and DIN are as physically wired.  BCLK was wired to IO8 and MUST NOT
-// stay there: IO8 is the DevKitC-1's addressable RGB LED (the variant header
-// defines PIN_RGB_LED 8, which is what step0_hello blinks via RGB_BUILTIN) and
-// it is also a boot-mode strapping pin on the C6.  Driving a continuous I2S bit
-// clock into a strapping pin is asking for intermittent boot failures, and the
-// LED sits on the same net as a load.  Move that one wire to IO11, which is
-// free now that the analog mic dropped the I2S clocks.
-#define AMP_BCLK_GPIO  11   // <-- move the wire from IO8 to IO11
-#define AMP_LRC_GPIO   10
+// All three are as physically wired, 2026-07-31.  BCLK is off IO8 at last,
+// which was the point: IO8 is the DevKitC-1's addressable RGB LED (the variant
+// header defines PIN_RGB_LED 8, which is what step0_hello blinks via
+// RGB_BUILTIN) and it is also a boot-mode strapping pin on the C6.  A
+// continuous bit clock into a strapping pin invites intermittent boot failures,
+// and the LED sits on the same net as a load.
+//
+// The clocks landed the opposite way round from what this file first said —
+// LRC on IO11, BCLK on IO10 — and the wire wins, because the swap costs
+// nothing.  Every I2S signal on the C6 reaches its pad through the GPIO matrix,
+// so no pin is special to a particular signal, and IO10 and IO11 are equally
+// clean: no strapping role, no JTAG role, and the analog mic freed both.
+//
+// DIN sits on IO4, which is JTAG MTMS and noisy at boot.  Harmless here because
+// DIN is an output and the amp is held muted through boot by the pulldown on SD
+// below, so whatever the pin does before setup() runs is never amplified.
+#define AMP_LRC_GPIO   11
+#define AMP_BCLK_GPIO  10
 #define AMP_DIN_GPIO   4
 
 // SD_MODE is enable AND channel select, so it cannot be left floating:
