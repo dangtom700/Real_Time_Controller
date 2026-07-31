@@ -29,7 +29,7 @@ Both boards share one 5 V rail and a common ground, fed from a single USB port.
 |---|---|---|
 | Button 1 (doorbell) | **IO1** | to GND; LP_GPIO → deep-sleep wake |
 | Button 2 (PTT) | **IO2** | to GND; LP_GPIO → deep-sleep wake |
-| Buzzer | **IO3** | to GND; LEDC tone |
+| ~~Buzzer~~ | ~~IO3~~ | **moved to the Nano — see below** |
 | Mic OUT (GY-MAX4466) | **IO6** | A6 / ADC1_CH6 |
 | Mic VCC | **3.3 V** | *not* 5 V — see below |
 | LED1 / LED2 | IO7 / IO5 | not yet wired |
@@ -47,6 +47,77 @@ Buttons are wired active-low to ground, so they need `INPUT_PULLUP`.
 | BCLK | **IO11** | moved off IO8 — see below |
 | SD | **IO3** + 10 kΩ to GND | HIGH = on (left channel), LOW = mute |
 | GAIN | *unconnected* | = 9 dB, correct for voice |
+
+### Transports
+
+| Path | Transport | Status |
+|---|---|---|
+| A ↔ B (voice + events) | ESP-NOW, unicast, channel 1 | ✅ measured, 100% delivery |
+| A ↔ B fallback | Zigbee / 802.15.4 | **events only — see below** |
+| A → C (display, buzzer, wake) | simplex UART, 2 wires | designed, not built |
+
+**Zigbee cannot carry the intercom.** It is a fallback for the doorbell *event*
+path only, and the reason is a hard frame limit rather than something tunable:
+
+```
+VoiceMsg                224 bytes, 73/s  = 130 kbps
+802.15.4 max PHY frame  127 bytes        -> ~100 usable after MAC headers
+```
+
+Every chunk would need splitting across three frames, each paying its own
+header, CSMA backoff and ack, against a 250 kbps raw PHY that yields perhaps
+50–100 kbps in practice — roughly half what voice needs. Events are a few bytes
+seconds apart and fit easily. Halving the audio (8-bit companded, ~65 kbps) is
+the change that would make voice-over-Zigbee viable.
+
+### A → C link (simplex, two wires)
+
+```
+board A  IO0   ──────>  board C  D0 (GPIO44)   message, 115200 8N1
+board A  IO10  ──────>  board C  D2 (GPIO5)    wake  ── 10 kΩ ── GND
+board A  GND   ───────  board C  GND
+```
+
+Simplex because nothing C knows needs to travel back. **Two wires rather than
+one** because C deep sleeps: a byte on RX cannot wake an ESP32-S3 from deep
+sleep at all — only GPIO, timer and touch can — and even from light sleep the
+first characters are consumed waking the UART. A single wire carrying both
+"wake" and "here is the message" loses the message every time. Sequence is:
+assert WAKE, wait ~300 ms for C to boot, then send.
+
+Pin choices are not arbitrary. IO10 carries no strapping or JTAG role, so it
+does not glitch while A boots — IO4–IO7 would, and a glitch on the wake line
+wakes C for nothing. The 10 kΩ pulldown at C covers the window between reset and
+the first `pinMode`, when every GPIO floats; same defensive pattern as the amp's
+SD pin.
+
+### Board C — Arduino Nano ESP32 (OLED + buzzer)
+
+The buzzer would not sound from the C6's IO3. The same element, same wiring
+topology (pin → buzzer → GND) and the same code path — `gpio_set_drive_capability`
+→ `ledcAttach` → `ledcWriteTone` — produced three clean, clearly distinct tones
+from the Nano's **D4**. That also confirmed the element is genuinely passive:
+an active buzzer would have sounded one pitch three times.
+
+Since the Nano was already carrying the OLED, the buzzer joins it there.
+
+**Pin numbering trap on this board.** PlatformIO's manifest sets
+`BOARD_USES_HW_GPIO_NUMBERS`, which turns *off* the Arduino pin remap that the
+Arduino IDE uses. With it off, the constant `D4` resolves to **GPIO7**, not
+GPIO4 — so `digitalWrite(4, …)` drives a pin that is not the one silkscreened
+D4. Always use the `D4` symbol. The Nano also uploads over **DFU**: double-tap
+RESET first, and expect the COM port to change.
+
+Two consequences worth carrying forward:
+
+- The doorbell beep is now a **message between boards**, not a local write, so
+  it inherits that link's latency and failure modes.
+- The panel can no longer make a sound while the C6 is the only thing awake,
+  which cuts across the deep-sleep design in §2.5.
+
+Unresolved: whether `ledcAttach` on IO3 was reporting `OK` or `FAILED` was never
+captured, so it is not known whether IO3 can drive anything at all. Treat IO3 as
+suspect before reusing it.
 
 ### The UART bench link is retired
 
