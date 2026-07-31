@@ -1,7 +1,10 @@
 // STEP 0 — "is this thing on?"
 //
-// Wiring:  one USB-C cable, into the port silkscreened UART.  Nothing else.
-// Run:     pio run -e step0_hello -t upload -t monitor --upload-port COMx
+// Wiring:  one USB-C cable, into the port silkscreened USB.  Nothing else.
+//          NOT the one marked UART -- that port needs a CP2102N driver Windows
+//          does not ship, and without it no COM port is ever created.
+// Run:     pio run -e step0_hello -t upload -t monitor --upload-port COM9
+//          (COM9 on this machine; `pio device list` if it moves.)
 // PASS:    the banner below, a MAC address, and a heartbeat every second.
 //
 // This proves four things at once, and it is worth doing on BOTH boards before

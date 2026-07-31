@@ -46,11 +46,15 @@ static const uint8_t  IMAGE_COUNT = 3;       // == RAGE_LIMIT, one constant (§2
 // both.  We unicast rather than broadcast on purpose: ESP-NOW only returns a
 // real delivery ack for unicast, and that ack rate is the number PLAN §5.1
 // wants you to watch.  Broadcast would report 100% success no matter what.
-#define LINK_PEER_MAC_INIT { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
+// Board B = 20:6E:F1:17:07:40, the board that ran voice_rx for the step 2
+// baseline.  Board A (the sender) is 20:6E:F1:17:03:B8 -- swap these if you
+// ever reverse the roles, since this must name the RECEIVER.
+#define LINK_PEER_MAC_INIT { 0x20, 0x6E, 0xF1, 0x17, 0x07, 0x40 }
 
 // ===========================================================================
 //  Guest node (door panel) — wired in later steps, listed now so the map is
-//  in one place.  From PLAN §10.4: 14 of 16 usable signals, 2 spare.
+//  in one place.  PLAN §10.4 budgeted 14 of 16 usable signals with 2 spare;
+//  the analog mic gives two back, so it is now 12 of 16 with 4 spare.
 // ===========================================================================
 #define BTN1_GPIO      2    // LP_GPIO2 — doorbell, deep-sleep wake
 #define BTN2_GPIO      3    // LP_GPIO3 — intercom PTT, deep-sleep wake
@@ -58,10 +62,27 @@ static const uint8_t  IMAGE_COUNT = 3;       // == RAGE_LIMIT, one constant (§2
 #define LED1_GPIO      6
 #define LED2_GPIO      7
 
-// INMP441 microphone, I2S RX — step 4, when the part arrives.
-#define MIC_SCK_GPIO   10
-#define MIC_WS_GPIO    11
-#define MIC_SD_GPIO    4
+// GY-MAX4466 electret mic amp, ANALOG out — step 4, when the part arrives.
+// Not the INMP441 this plan first assumed.  The MAX4466 emits an analog audio
+// signal, so it lands on the ADC rather than on I2S: MIC_SCK and MIC_WS stop
+// existing and IO10/IO11 come free on this node.
+//
+// IO4 is forced, not chosen.  The C6 has ONE ADC unit and only GPIO0-6 are
+// analog-capable (A0..A6).  Of those IO0/IO1 are the bench link, IO2/IO3 are
+// the deep-sleep wake buttons, IO5 is the buzzer and IO6 is LED1.  IO4 is what
+// is left.  It doubles as JTAG MTMS (§4.1), so it is noisy at boot — fine for
+// an audio input biased mid-rail, but do not trust a reading taken during reset.
+//
+// POWER IT FROM 3.3V, NOT 5V.  The MAX4466 biases its output at VCC/2 and
+// swings around it.  At 5V that centres on 2.5V with peaks heading toward 5V,
+// into a pin whose absolute max is ~3.6V.  Its supply range is 2.4-5.5V, so
+// 3.3V is well in spec and puts the centre at 1.65V — right inside the ADC's
+// 0-3.1V window at 11 dB attenuation.
+//
+// Sample it with analogContinuous() (ADC DMA), not analogRead().  The whole
+// design rests on a 13.75 ms deadline and analogRead() jitter would land
+// straight in the gap-max that step 2 calibrated.
+#define MIC_OUT_GPIO   4          // A4 / ADC1_CH4
 
 // ILI9341 panel, SPI — no MISO (write-only) and no SDCS (no card). §10.4.
 #define TFT_MOSI_GPIO  18
@@ -72,8 +93,13 @@ static const uint8_t  IMAGE_COUNT = 3;       // == RAGE_LIMIT, one constant (§2
 #define TFT_BL_GPIO    23
 
 // ===========================================================================
-//  Host node (indoor chime) — 6 of 16 signals.
+//  Host node (indoor chime) — 6 of 16 signals.  UNCHANGED by the mic swap.
 //  MAX98357A amp, I2S TX — step 5, when the part arrives.
+//
+//  Keep this amp digital.  The C6 has no DAC at all (unlike the original ESP32
+//  and the S2), so an analog amp such as an LM386 would have to be fed PWM
+//  through an RC reconstruction filter.  I2S straight into the MAX98357A skips
+//  that whole problem, and the part is happy on the 5V rail (2.5-5.5V).
 // ===========================================================================
 #define AMP_BCLK_GPIO  10
 #define AMP_LRC_GPIO   11
