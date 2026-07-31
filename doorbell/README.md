@@ -5,7 +5,8 @@ Two ESP32-C6-DevKitC-1 boards, brought up one step at a time. Every env in
 hear, or measure. This file records what each step actually measured on this
 bench, so later steps have a baseline to be judged against.
 
-Status: **steps 0–3 pass.** Steps 4–5 wait on the mic and amp.
+Status: **steps 0–3 pass.** The panel hardware is now wired (buttons, buzzer,
+mic, amp) and untested — buttons and buzzer are the next thing to bring up.
 
 ## The two boards
 
@@ -18,18 +19,63 @@ Status: **steps 0–3 pass.** Steps 4–5 wait on the mic and amp.
 name the RECEIVER. The MAC is also the USB serial number, so `pio device list`
 tells you which board is on which port without flashing anything.
 
-## Bench setup
+## Current wiring
 
-Link jumpers, used by steps 1 and 2 (remove them for step 3):
+Both boards share one 5 V rail and a common ground, fed from a single USB port.
 
-```
-board A  IO1  ────>  board B  IO0        (LINK_TX_GPIO -> LINK_RX_GPIO)
-board A  GND  ─────  board B  GND        (required)
-```
+### Board A — guest node (door panel)
 
-The boards also share a 5 V rail, so only one is USB-powered at a time and the
-other draws off the rail. Do not leave both on USB while 5 V is tied — that
-parallels two host supplies through the jumper.
+| Signal | Pin | Notes |
+|---|---|---|
+| Button 1 (doorbell) | **IO1** | to GND; LP_GPIO → deep-sleep wake |
+| Button 2 (PTT) | **IO2** | to GND; LP_GPIO → deep-sleep wake |
+| Buzzer | **IO3** | to GND; LEDC tone |
+| Mic OUT (GY-MAX4466) | **IO6** | A6 / ADC1_CH6 |
+| Mic VCC | **3.3 V** | *not* 5 V — see below |
+| LED1 / LED2 | IO7 / IO5 | not yet wired |
+
+Buttons are wired active-low to ground, so they need `INPUT_PULLUP`.
+
+### Board B — host node (indoor chime)
+
+| MAX98357A | Pin | Notes |
+|---|---|---|
+| VIN | 5 V rail | 10 µF + 100 µF local decoupling |
+| GND | GND | |
+| DIN | **IO4** | |
+| LRC | **IO10** | |
+| BCLK | **IO11** | moved off IO8 — see below |
+| SD | **IO3** + 10 kΩ to GND | HIGH = on (left channel), LOW = mute |
+| GAIN | *unconnected* | = 9 dB, correct for voice |
+
+### The UART bench link is retired
+
+Steps 1 and 2 used `board A IO1 → board B IO0` plus common ground. **BTN1 now
+occupies IO1**, so that link and the button cannot coexist. This is acceptable —
+the shipped transport is the radio, and the UART baseline is recorded below —
+but the wire can no longer be re-measured for comparison without lifting the
+button. Move BTN1 to IO7 if that fallback is wanted back.
+
+### Pins that must not be used
+
+- **IO8** — the DevKitC-1's addressable RGB LED (`PIN_RGB_LED 8` in the variant
+  header, what `step0_hello` blinks) *and* a C6 boot-mode strapping pin. BCLK
+  was originally wired here; a continuous bit clock into a strapping pin invites
+  intermittent boot failures.
+- **IO9, IO15** — strapping. **IO12/IO13** — USB D-/D+. **IO16/IO17** — UART0
+  console.
+- **IO4–IO7** double as JTAG and are noisy at boot. Tolerable for LEDs and for a
+  mid-rail-biased audio input; do not trust a reading taken during reset.
+
+### Power budget
+
+One USB port now feeds two ESP32-C6s plus the amp. Audio peaks run 600–700 mA
+against 500 mA (USB 2.0) or 900 mA (USB 3.0). The 110 µF fitted is light for
+that transient — a 470 µF bulk cap at the amp's VIN would be better.
+
+The tell is already built in: `step0_hello` decodes `ESP_RST_BROWNOUT` as
+`"BROWNOUT (bad power)"`. A board resetting during loud playback and reporting
+that is a rail problem, not a code problem.
 
 ## Results
 
@@ -74,6 +120,29 @@ Sender:
 and loss; the cost is jitter — gap-max runs 2–4× the wire's. Since `lost=0`,
 packets are bunching rather than dropping. Worst observed gap of 56.7 ms is 4.1
 chunk periods, so roughly 5 chunks (~69 ms) of jitter buffer absorbs it.
+
+### Step IO — buttons and buzzer
+
+Board A only, no link involved. Out of numeric order because it needed the panel
+wired, which happened after steps 0–3 had already passed.
+
+```
+pio run -e step_io -t upload -t monitor --upload-port COM9
+```
+
+Built; **not yet run on hardware.** PASS is: a three-note rising sweep at boot,
+exactly one line per press (never a burst), `pressCount` walking 1, 2, 3 and then
+locking, and BTN2 held 2 s printing `TALK`.
+
+It reproduces on purpose the semantics step 1 faked. The `pressCount` that walked
+`1,2,3,3,3,3` over the wire was synthetic; here it comes from a real thumb,
+clamped by the same `RAGE_LIMIT` and expired by the same `TIMER1_MS`. If the
+numbers behave the same way, the input layer can be dropped under the link with
+nothing else changing.
+
+Each press also reports how long the contact took to settle, so if bounce ever
+outlasts `DEBOUNCE_MS` the log tells you what to raise it to rather than leaving
+you to guess.
 
 ## Reading the instruments
 
@@ -151,10 +220,25 @@ into an ADC pin whose absolute max is ~3.6 V. Its supply range is 2.4–5.5 V, s
 3.3 V is well in spec and centres the output at 1.65 V, inside the ADC's
 0–3.1 V window at 11 dB attenuation.
 
-**IO4 is forced, not chosen.** The C6 has one ADC unit and only GPIO0–6 are
-analog-capable. IO0/IO1 are the bench link, IO2/IO3 the wake buttons, IO5 the
-buzzer, IO6 LED1 — IO4 is what remains. Dropping the I2S mic clocks frees
-IO10/IO11 on the guest node, taking §10.4's budget from 14-of-16 to 12-of-16.
+**The mic must sit on GPIO0–6.** The C6 has one ADC unit and only those seven
+pins are analog-capable. IO6 is the one used, and it is a better choice than the
+IO4 first written into the config: IO4 doubles as JTAG MTMS and is noisy at
+boot, while IO6 carries no strapping or JTAG role. Dropping the I2S mic clocks
+frees IO10/IO11 on the guest node, taking §10.4's budget from 14-of-16 to
+12-of-16.
+
+**SD must be wired; floating is not a setting.** SD_MODE is enable *and* channel
+select — under 0.16 V is shutdown, 0.16–0.77 V right, 0.77–1.4 V (L+R)/2, above
+1.4 V left. Left floating, behaviour depends on whatever resistor the particular
+breakout carries. It is driven from IO3 with a 10 kΩ pulldown: 10 kΩ rather than
+100 kΩ because many breakouts have a ~1 MΩ pullup to VIN, against which 100 kΩ
+divides to ~0.45 V — inside the *right channel* band, so the amp would come up
+enabled on the wrong channel instead of muted. The pulldown also holds the amp
+off through boot, before `setup()` runs, which removes the power-on pop.
+
+Because SD selects the **left** channel, the I2S config must place samples in
+the left slot. Right-slot data into a left-configured amp is silent, and looks
+identical to the floating-SD failure.
 
 **Keep the amp digital.** The C6 has no DAC (verified: `soc_caps.h` defines no
 DAC symbols; `SOC_ADC_PERIPH_NUM` is 1 with 7 channels). An analog amp like the

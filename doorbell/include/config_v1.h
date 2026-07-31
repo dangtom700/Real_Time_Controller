@@ -56,22 +56,31 @@ static const uint8_t  IMAGE_COUNT = 3;       // == RAGE_LIMIT, one constant (§2
 //  in one place.  PLAN §10.4 budgeted 14 of 16 usable signals with 2 spare;
 //  the analog mic gives two back, so it is now 12 of 16 with 4 spare.
 // ===========================================================================
-#define BTN1_GPIO      2    // LP_GPIO2 — doorbell, deep-sleep wake
-#define BTN2_GPIO      3    // LP_GPIO3 — intercom PTT, deep-sleep wake
-#define BUZZER_GPIO    5    // LEDC tone
-#define LED1_GPIO      6
-#define LED2_GPIO      7
+// As physically wired on the bench, 2026-07-30.  Both buttons are still inside
+// LP_GPIO0-7, which is the constraint that actually matters: nothing outside
+// that range can wake the C6 from deep sleep.
+//
+// NOTE: BTN1 sits on IO1, which is LINK_TX_GPIO.  That retires the step 1/2
+// UART bench link on this board — the two cannot coexist.  Acceptable because
+// the shipped transport is the radio and the UART baseline is already recorded
+// in README.md, but it does mean you cannot re-measure the wire for comparison
+// without lifting this button.  Move BTN1 to IO7 if you want that back.
+#define BTN1_GPIO      1    // LP_GPIO1 — doorbell, deep-sleep wake
+#define BTN2_GPIO      2    // LP_GPIO2 — intercom PTT, deep-sleep wake
+#define BUZZER_GPIO    3    // LEDC tone (LP_GPIO3, but nothing needs it to wake)
+#define LED1_GPIO      7    // not yet wired; moved off IO6, now the mic input
+#define LED2_GPIO      5    // not yet wired
 
 // GY-MAX4466 electret mic amp, ANALOG out — step 4, when the part arrives.
 // Not the INMP441 this plan first assumed.  The MAX4466 emits an analog audio
 // signal, so it lands on the ADC rather than on I2S: MIC_SCK and MIC_WS stop
 // existing and IO10/IO11 come free on this node.
 //
-// IO4 is forced, not chosen.  The C6 has ONE ADC unit and only GPIO0-6 are
-// analog-capable (A0..A6).  Of those IO0/IO1 are the bench link, IO2/IO3 are
-// the deep-sleep wake buttons, IO5 is the buzzer and IO6 is LED1.  IO4 is what
-// is left.  It doubles as JTAG MTMS (§4.1), so it is noisy at boot — fine for
-// an audio input biased mid-rail, but do not trust a reading taken during reset.
+// Only GPIO0-6 are analog-capable on the C6 (A0..A6, one ADC unit), so the mic
+// had to land in that range.  IO6 is the pick and it is a better one than the
+// IO4 first written here: IO4 doubles as JTAG MTMS and is noisy at boot, while
+// IO6 has no strapping or JTAG role at all.  IO6 was LED1; the LED moved to
+// IO7, which costs nothing since neither LED is wired yet.
 //
 // POWER IT FROM 3.3V, NOT 5V.  The MAX4466 biases its output at VCC/2 and
 // swings around it.  At 5V that centres on 2.5V with peaks heading toward 5V,
@@ -82,7 +91,7 @@ static const uint8_t  IMAGE_COUNT = 3;       // == RAGE_LIMIT, one constant (§2
 // Sample it with analogContinuous() (ADC DMA), not analogRead().  The whole
 // design rests on a 13.75 ms deadline and analogRead() jitter would land
 // straight in the gap-max that step 2 calibrated.
-#define MIC_OUT_GPIO   4          // A4 / ADC1_CH4
+#define MIC_OUT_GPIO   6          // A6 / ADC1_CH6
 
 // ILI9341 panel, SPI — no MISO (write-only) and no SDCS (no card). §10.4.
 #define TFT_MOSI_GPIO  18
@@ -101,7 +110,35 @@ static const uint8_t  IMAGE_COUNT = 3;       // == RAGE_LIMIT, one constant (§2
 //  through an RC reconstruction filter.  I2S straight into the MAX98357A skips
 //  that whole problem, and the part is happy on the 5V rail (2.5-5.5V).
 // ===========================================================================
-#define AMP_BCLK_GPIO  10
-#define AMP_LRC_GPIO   11
+// LRC and DIN are as physically wired.  BCLK was wired to IO8 and MUST NOT
+// stay there: IO8 is the DevKitC-1's addressable RGB LED (the variant header
+// defines PIN_RGB_LED 8, which is what step0_hello blinks via RGB_BUILTIN) and
+// it is also a boot-mode strapping pin on the C6.  Driving a continuous I2S bit
+// clock into a strapping pin is asking for intermittent boot failures, and the
+// LED sits on the same net as a load.  Move that one wire to IO11, which is
+// free now that the analog mic dropped the I2S clocks.
+#define AMP_BCLK_GPIO  11   // <-- move the wire from IO8 to IO11
+#define AMP_LRC_GPIO   10
 #define AMP_DIN_GPIO   4
+
+// SD_MODE is enable AND channel select, so it cannot be left floating:
+//     < 0.16 V  shutdown        0.77 - 1.4 V  (L+R)/2
+//   0.16-0.77 V  right channel      > 1.4 V   left channel
+//
+// Drive HIGH to enable on the LEFT channel, LOW to mute.  Muting between
+// sessions matters here: a Class D amp hisses when idle and this intercom is
+// silent most of the time.
+//
+// Fit a 10k pulldown from SD to GND as well.  Two reasons.  It holds the amp
+// off through boot and reset, before setup() can drive the pin, which kills the
+// power-on pop.  And 10k specifically, not 100k: many breakouts carry a ~1M
+// pullup to VIN, against which 100k divides to ~0.45 V — inside the RIGHT
+// CHANNEL band, so the amp would come up enabled on the wrong channel instead
+// of muted.  10k lands at ~0.05 V, under the shutdown threshold regardless.
+//
+// Software must send I2S on the LEFT slot to match.
+#define AMP_SD_GPIO    3    // HIGH = on (left channel), LOW = muted
+
+// GAIN needs no wire at all.  Unconnected is the 9 dB setting, which is right
+// for voice.  Tie it to GND for 15 dB if the chime is too quiet.
 #define CHIME_BUZZER_GPIO 5
