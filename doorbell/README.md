@@ -70,13 +70,23 @@ header, CSMA backoff and ack, against a 250 kbps raw PHY that yields perhaps
 seconds apart and fit easily. Halving the audio (8-bit companded, ~65 kbps) is
 the change that would make voice-over-Zigbee viable.
 
-### A → C link (simplex, two wires)
+### A → C link (simplex, two wires) — **wired**
 
 ```
-board A  IO0   ──────>  board C  D0 (GPIO44)   message, 115200 8N1
-board A  IO10  ──────>  board C  D2 (GPIO5)    wake  ── 10 kΩ ── GND
+board A  IO0   ──────>  board C  D2 (GPIO5)    message, 115200 8N1
+board A  IO10  ──────>  board C  D3 (GPIO6)    wake  ── 10 kΩ ── GND
 board A  GND   ───────  board C  GND
 ```
+
+Both C-side ends sit one pin along from where the design first put them
+(message was D0, wake was D2). The move is an improvement rather than a
+compromise: **D0/D1 are GPIO44/43, the S3's UART0 pins**, which also carry ROM
+boot chatter, so a link on D2 cannot be confused by a board that is merely
+resetting. The GPIO matrix routes a UART to any pad, so nothing is lost by
+leaving the "real" UART pins alone.
+
+Both C pins stay inside GPIO0–21, which is the constraint that actually
+matters — ESP32-S3 deep-sleep wake needs an RTC-capable pin and `D3` is GPIO6.
 
 Simplex because nothing C knows needs to travel back. **Two wires rather than
 one** because C deep sleeps: a byte on RX cannot wake an ESP32-S3 from deep
@@ -85,11 +95,50 @@ first characters are consumed waking the UART. A single wire carrying both
 "wake" and "here is the message" loses the message every time. Sequence is:
 assert WAKE, wait ~300 ms for C to boot, then send.
 
-Pin choices are not arbitrary. IO10 carries no strapping or JTAG role, so it
-does not glitch while A boots — IO4–IO7 would, and a glitch on the wake line
+Pin choices on A are not arbitrary. IO10 carries no strapping or JTAG role, so
+it does not glitch while A boots — IO4–IO7 would, and a glitch on the wake line
 wakes C for nothing. The 10 kΩ pulldown at C covers the window between reset and
 the first `pinMode`, when every GPIO floats; same defensive pattern as the amp's
-SD pin.
+SD pin. `step_panel_rx` also sets `INPUT_PULLDOWN`, which backs the resistor up
+but cannot replace it — it only takes effect once `pinMode` has run, and that is
+exactly the window the resistor exists for.
+
+#### step_panel — proving it
+
+```
+pio run -e step_panel_tx -t upload --upload-port COMx   # board A
+pio run -e step_panel_rx -t upload --upload-port COMy   # board C, DFU
+```
+
+A sends one `DoorbellMsg` every 4 s with `pressCount` walking 1, 2, 3 and then
+clamping — the same §2.3.1 sequence step 1 put on the A↔B wire and step_io
+produced from a real thumb, so C's decoder is fed exactly what the finished
+panel will feed it. C beeps once per press count, with a lower tone once
+`locked` is set, which makes the *content* audible and not just the arrival.
+
+Framing is `A5 5A | len | payload | crc16-le`, the same as `link.h`'s UART
+backend and duplicated in `panel_link.h` rather than shared. That is deliberate:
+`link.h` picks between UART1 and ESP-NOW at compile time and refuses to build
+until one is chosen, because it answers "how does A talk to B". This is a third
+transport that must coexist with whichever answer that is, so it cannot be a
+third case inside that switch.
+
+**C's report line is layered on purpose**, because the amp bring-up burned four
+sketches reading one symptom as one fault:
+
+```
+wake=1  raw=1234  frames=12  crc=0  bad=0
+```
+
+| Symptom | Fault is in |
+|---|---|
+| `raw=0` | the UART wire, the baud, or the pin |
+| `raw` climbing, `frames=0` | framing or a baud mismatch |
+| `frames` climbing, no sound | the buzzer, not the link |
+
+`wake` is read straight off the pin, so it proves that wire on its own. And C
+beeps once at boot before any message can have arrived — if that self-test is
+silent, the buzzer is the fault and nothing about the link is worth reading yet.
 
 ### Board C — Arduino Nano ESP32 (OLED + buzzer)
 
@@ -456,3 +505,137 @@ MAX98357A avoids that entirely.
 Neither change touches `protocol.h` or the link layer. `VoiceMsg` still carries
 `int16` PCM at 8 kHz — the mic path becomes 12-bit ADC scaled to `int16`, and
 the amp path stays I2S. Everything steps 1–3 proved still holds.
+
+---
+
+## Sidetrack — Metro M4 bare metal (`metro_gpio`)
+
+Not part of the doorbell. Different chip, different vendor, different toolchain:
+an **Adafruit Metro M4 Express**, ATSAMD51J19A, Cortex-M4F. A button on D7
+lights an LED on D8 using PORT registers only — no Arduino, no CMSIS, no
+framework at all. It lives here because the bench is here; nothing in it links
+against anything else in this project, and the ESP32 envs never see it.
+
+```
+pio run -e metro_gpio
+python tools/bin2uf2.py .pio/build/metro_gpio/firmware.bin
+```
+
+Then **double-tap** RESET and copy the `.uf2` onto the `METROM4BOOT` drive. One
+tap is an ordinary reset and just reruns whatever is already flashed.
+
+Built and statically verified; **never run on hardware** — no Metro M4 has been
+attached. What was checked is the image, not the behaviour: the vector table
+(SP `0x20030000`, exactly the top of 192 KB; reset vector `0x4095`, handler plus
+Thumb bit), every register address in the disassembly against the data sheet,
+and the UF2 container's magics, family ID and load addresses.
+
+### Wiring
+
+There is no user button on this board, so **the button is the one part you must
+wire.** One wire and a switch, no resistor — the pull-up is internal:
+
+```
+D7 ---[ button ]----------- GND
+```
+
+The external LED is **optional**, because D13 shows the same state and is
+soldered down:
+
+```
+D8 ---[ LED ]---[ 330R ]--- GND        long leg to D8
+```
+
+Do not use the LED on **pin 40**. That is PB22, the internal *NeoPixel*
+(`variant.h` `PIN_NEOPIXEL`; guide p.21) — an addressable WS2812-style part.
+Driving it to a level does nothing visible; it decodes a serial bitstream at
+~800 kHz with sub-microsecond pulse widths, which would make this program depend
+on the CPU clock. **PA16 / D13 is the only built-in LED that is just an LED on a
+pin**, and `variant.h` defines `LED_BUILTIN` as pin 13, not 40.
+
+### PASS
+
+D13 alone is enough to test this — with only the button wired and nothing else
+on the bench:
+
+| D13 | D8 (if wired) | Means |
+|---|---|---|
+| solid ON while held | on | **PASS** |
+| slow blink, ~1.5 Hz | off | running, button released — this is idle |
+| blinks, but never goes solid | off | running, but PB12 never reads low → button or its wiring |
+| dark, or a slow fade | — | image never ran; still in the UF2 bootloader |
+
+Two states rather than one on/off level, because a bare-metal image has no
+console. A single indicator cannot separate "the button is not connected" from
+"the image never ran" — both read as dark. The idle blink proves the loop is
+executing *before* the button is touched, so pressing is then a clean second
+test.
+
+It also matters that idle is the blink and pressed is the solid, not the
+reverse: the UF2 bootloader leaves D13 slowly pulsing on its own, so an idle
+state of "solid on" would have been the one pattern that could be confused with
+never having left the bootloader.
+
+### The pins are not two bits of one port
+
+```
+D7  ->  PB12   group 1, bit 12   (64-pin package pin 25)
+D8  ->  PA21   group 0, bit 21   (64-pin package pin 42)
+D13 ->  PA16   group 0, bit 16   (64-pin package pin 35)
+```
+
+Board pin labels are not chip pins — the same trap as board C's `D4` meaning
+GPIO7. D7 and D8 land in *different* PORT groups, two register banks `0x80`
+apart, so there is no single mask that covers both.
+
+This mapping is a **board** fact and appears in no data sheet. It comes from
+Adafruit's `variant.cpp` for `metro_m4`. Package pin numbers are from data sheet
+Table 6-1, worth checking before trusting any pin: PB12 has no 48-pin column at
+all and exists only on 64-pin parts and larger.
+
+### Two silent traps, and the document that does not contain them
+
+Both of these fail by doing nothing, with code that reads as correct:
+
+- **`INEN` defaults to 0.** After reset every pin is an input with its input
+  buffer *disabled* (§32.5.2). Skip `PINCFG.INEN` and `IN` never reflects the
+  pad at all — the pin reads permanently stuck and nothing looks wrong.
+- **There is no pull-direction register.** With `PULLEN=1` the pull is a
+  pull-*up* when `OUT=1` and a pull-*down* when `OUT=0` (Table 32-2). The same
+  `OUT` bit means "drive level" on an output and "which way to pull" on an
+  input. Set `OUT` first, then `PULLEN`, or the pin briefly pulls the wrong way.
+
+Neither is in `Adafruit Metro M4 Express datasheet.pdf` at the repo root. That
+file is **not a datasheet** — it is Adafruit's 242-page CircuitPython learn
+guide. A search for `PA00`–`PB31` across all 242 pages hits one page, as a
+generic SAMD21 example. It has no registers, no addresses and no pin mapping.
+
+The real source is the **SAM D5x/E5x Family Data Sheet, DS60001507** (~2000 pp),
+which is *not* in this repo. Every address in `src/metro_gpio/main.c` is cited to
+a section and page in it.
+
+One thing it saves you: PORT needs **no clock enable**. `MCLK.APBBMASK` resets
+to `0x00018056` and bit 4 is PORT (§15.8.8), so its APB clock is already running
+out of reset. Most peripherals on this chip need an explicit unmask; PORT is one
+of the few that does not.
+
+### Why the env overrides everything
+
+`framework =` is assigned **empty** on purpose. That cancels the inherited
+`framework = arduino`, and PlatformIO then builds with no framework: no core, no
+startup code, no linker script. `src/metro_gpio/startup.c` and `samd51j19a.ld`
+supply those instead. Delete that one line and the Arduino core returns and
+fights our vector table.
+
+The image links at **`0x4000`**, not 0 — the first 16 KB of flash hold the UF2
+bootloader. Link it at 0 and flashing it destroys the bootloader, after which
+the board needs an SWD probe to recover.
+
+`bin2uf2.py` exists because with no framework there is no `pio run -t upload`
+recipe; PlatformIO gets upload rules from the framework. UF2 sidesteps it
+entirely — the bootloader is USB mass storage, so flashing is a file copy with
+no driver, no COM port and no bossac. Which matters on this machine, where a
+missing CP2102N driver already cost a serial port.
+
+First build downloads `toolchain-gccarmnoneeabi` (~120 MB). Per the toolchain
+trap below, do not let the VSCode PlatformIO extension re-init while it runs.

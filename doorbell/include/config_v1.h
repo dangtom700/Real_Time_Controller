@@ -78,13 +78,26 @@ static const uint8_t  IMAGE_COUNT = 3;       // == RAGE_LIMIT, one constant (§2
 //  message every time.  Assert WAKE, wait PANEL_WAKE_MS for C to boot, then
 //  send.
 //
-//  Board C side:  message -> D0 (GPIO44)   wake -> D2 (GPIO5, RTC-capable)
-//  Use Serial1 remapped onto D0/D1 there; UART0 is free because that board's
-//  console runs over native USB CDC, but remapping keeps the two apart.
+//  AS PHYSICALLY WIRED, 2026-07-31.  Both C-side ends moved off what this file
+//  first specified (message was D0, wake was D2):
+//
+//      A IO0   ──> C D2 (GPIO5)    message, 115200 8N1
+//      A IO10  ──> C D3 (GPIO6)    wake
+//      A GND   ─── C GND
+//
+//  The message pin is better here than where the design put it.  D0/D1 are
+//  GPIO44/43, which are the S3's UART0 pins and carry ROM boot chatter; a link
+//  on D2 cannot be confused by that.  Remap Serial1 onto D2 — the GPIO matrix
+//  routes a UART to any pad, so nothing is lost by moving off the "real" ones.
+//
+//  Both C pins stay RTC-capable, which is the constraint that actually matters:
+//  ESP32-S3 deep-sleep wake needs GPIO0-21, and D3 is GPIO6.
 //
 //  Fit a 10k pulldown on the wake line at C.  Every GPIO floats between reset
 //  and the first pinMode, and a floating wake line means A's own boot wakes C
-//  for no reason — the same defensive pulldown the amp's SD pin gets.
+//  for no reason — the same defensive pulldown the amp's SD pin gets.  The
+//  sketch also sets INPUT_PULLDOWN, but that only covers the window AFTER
+//  pinMode runs, which is precisely not the window the resistor is for.
 // ===========================================================================
 #define PANEL_TX_GPIO    0        // A -> C, UART TX. Old LINK_RX pin, now free.
 #define PANEL_WAKE_GPIO  10       // A -> C, wake. IO10/11 are the only free
@@ -92,6 +105,17 @@ static const uint8_t  IMAGE_COUNT = 3;       // == RAGE_LIMIT, one constant (§2
                                   // line does not glitch while A boots.
 #define PANEL_BAUD       115200
 #define PANEL_WAKE_MS    300      // deep-sleep boot time to allow before sending
+
+// Board C's side of the same three wires.  Guarded because D2/D3/D4 are Nano
+// symbols that do not exist in a C6 build, and because getting them wrong is a
+// documented trap on this board: the manifest sets BOARD_USES_HW_GPIO_NUMBERS,
+// so the Arduino pin remap is OFF and D4 means GPIO7, not GPIO4.  Always use
+// the Dx symbol, never the literal.
+#if defined(ARDUINO_NANO_ESP32)
+#define PANEL_C_RX_PIN    D2      // = GPIO5, message in from A IO0
+#define PANEL_C_WAKE_PIN  D3      // = GPIO6, wake in from A IO10, RTC-capable
+#define PANEL_C_BUZZ_PIN  D4      // = GPIO7, the pin that already rang cleanly
+#endif
 
 // ===========================================================================
 //  Guest node (door panel) — wired in later steps, listed now so the map is

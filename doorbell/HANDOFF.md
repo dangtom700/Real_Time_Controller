@@ -33,30 +33,38 @@ swaps — check the MAC, never the port number.
 | Mic (A, IO6) | wired, **untested** |
 | Step 5 — link side | ✅ lost=0, i2s=1393/rx=1405, costs the link nothing |
 | Step 5 — audio | ⛔ **PARKED.** Amp receives data but far too quiet to judge. Never heard properly |
-| A → C link | designed, **not built** |
+| A → C link | ✅ wired (A IO0→C D2, A IO10→C D3); `step_panel_tx`/`_rx` built, **not run** |
 | OLED | not started |
 | Zigbee fallback | not built |
+| `metro_gpio` — Metro M4 bare metal | ✅ builds; image verified; **never flashed**, no board attached |
 
 ## Do these first
 
-1. **Wire the A → C link**, two signal wires plus ground:
+1. **Run `step_panel`.** Wired and built; never flashed, because only one USB
+   cable reaches the bench and it is on board B. Flash A, then C, then leave the
+   cable on **C** — C is the one that prints the layered report, and A runs off
+   the shared 5 V rail.
    ```
-   A IO0   ──> C D0 (GPIO44)   message, 115200 8N1
-   A IO10  ──> C D2 (GPIO5)    wake ── 10 kΩ ── GND
-   A GND   ─── C GND
+   pio run -e step_panel_tx -t upload --upload-port <A>   # C6, native USB port
+   pio run -e step_panel_rx -t upload --upload-port <C>   # Nano, DFU: double-tap RESET
    ```
+   PASS: a self-test beep at boot, then one burst every 4 s with the beep count
+   walking 1, 2, 3 and holding at 3 with the lower `locked` tone under it.
 
-2. **Build a `step_panel` env** to prove that link before the OLED or the state
-   machine depends on it — A sending on a timer, C echoing what it decodes.
-   The sequencing is the risky part: assert wake, wait `PANEL_WAKE_MS` (300 ms)
-   for C to boot, *then* send. Get the order wrong and it fails only when C
-   happens to be asleep, which a bench rarely reproduces.
+   The sequencing is the risky part and is what this actually tests: assert
+   wake, wait `PANEL_WAKE_MS` (300 ms) for C to boot, *then* send. Get the order
+   wrong and it still passes on a bench where C is already awake, then fails in
+   the field every time C has gone to sleep.
 
-3. **Test the mic** on A's IO6. Sample with `analogContinuous()` (ADC DMA), not
+   **Check the wake line has its 10 kΩ pulldown at C.** It was not mentioned
+   when the link was wired. `INPUT_PULLDOWN` in the sketch does not cover the
+   reset-to-`pinMode` window, which is the whole reason the resistor is there.
+
+2. **Test the mic** on A's IO6. Sample with `analogContinuous()` (ADC DMA), not
    `analogRead()` — the design rests on a 13.75 ms deadline and `analogRead()`
    jitter lands straight in the `gap-max` that step 2 calibrated.
 
-4. **Audio is parked, not broken — resume it with the two cheap levers.** Read
+3. **Audio is parked, not broken — resume it with the two cheap levers.** Read
    README §Step 5 *What the bring-up established* first; it records which
    results from that session are real and which are void. Short version: the
    amp works and is simply too quiet, GAIN is still unconnected at 9 dB, and
@@ -66,6 +74,19 @@ swaps — check the MAC, never the port number.
    Only one USB cable reaches the bench, and it currently sits on board B
    (COM8); board A runs off the shared 5 V rail. Moving it back is what makes
    board A visible again.
+
+4. **`metro_gpio` has never touched hardware** — a sidetrack, not a doorbell
+   step; see README §Sidetrack. It builds and the image checks out (vector
+   table, every register address, UF2 container), but no Metro M4 has been
+   plugged in, so nothing about it is confirmed. Flashing is a file copy:
+   `pio run -e metro_gpio`, `python tools/bin2uf2.py
+   .pio/build/metro_gpio/firmware.bin`, **double-tap** RESET, drop the `.uf2` on
+   `METROM4BOOT`. The button on D7 is the only part that must be wired; D13 is
+   soldered down and shows the same state, so the external LED on D8 is
+   optional. Read D13 first: slow blink = running and released, solid = pressed
+   (PASS), blinks but never solid = the button, dark = never left the bootloader.
+   **Not the LED on pin 40** — that is PB22, the NeoPixel, and it cannot be lit
+   by a level write.
 
 ## Unresolved
 
