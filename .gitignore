@@ -1,2 +1,6 @@
 Anti-rage doobell/build/project.checksum
+
+# Nested sibling projects: each keeps its own .git and its own GitHub remote.
+# Ignored here so this repo never tries to track them as gitlinks.
 MSE450_material/
+potato/
